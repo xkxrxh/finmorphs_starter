@@ -25,7 +25,7 @@ from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Image,
-    PageBreak, KeepTogether
+    PageBreak, KeepTogether, Table, TableStyle, HRFlowable
 )
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -59,6 +59,12 @@ if "finmorphs_observation_review" not in st.session_state:
         "assumptions_to_review": [],
         "unanswered_questions": [],
     }
+if "finmorphs_approved_assumptions" not in st.session_state:
+    st.session_state["finmorphs_approved_assumptions"] = []
+if "finmorphs_scenario_comparison" not in st.session_state:
+    st.session_state["finmorphs_scenario_comparison"] = None
+if "finmorphs_finding_reviews" not in st.session_state:
+    st.session_state["finmorphs_finding_reviews"] = {}
 
 evidence = st.session_state["finmorphs_evidence"]
 for evidence_type in ("photos", "videos"):
@@ -104,6 +110,27 @@ def register_session_item(kind, name, data, mime_type, source, transcript=""):
         "transcript": transcript,
     })
     return item_id
+
+
+def build_scenarios(unit_cost, contribution, monthly_units):
+    """Calculate comparable volume scenarios from the current assumptions."""
+    return [
+        {
+            "Scenario": label,
+            "Units / month": round(monthly_units * multiplier),
+            "Inventory cost (₹)": round(
+                round(monthly_units * multiplier) * unit_cost, 2
+            ),
+            "Contribution before fixed costs (₹)": round(
+                round(monthly_units * multiplier) * contribution, 2
+            ),
+        }
+        for label, multiplier in [
+            ("Conservative", 0.5),
+            ("Base", 1.0),
+            ("Upside", 1.25),
+        ]
+    ]
 
 
 for photo in evidence["photos"]:
@@ -199,8 +226,16 @@ def saved_evidence_summary(evidence):
 
 
 def append_saved_media_to_parts(client, parts, evidence):
-    """Attach all persisted session media to a Gemini request."""
+    """Attach persisted media with source markers to a Gemini request."""
     for photo in evidence["photos"]:
+        parts.append({
+            "type": "text",
+            "text": (
+                f"[EVIDENCE SOURCE: {photo['name']}] "
+                "The following image is the submitted photo. Cite this exact "
+                "filename when referring to visible evidence."
+            ),
+        })
         parts.append({
             "type": "image",
             "data": base64.b64encode(photo["data"]).decode("utf-8"),
@@ -208,11 +243,27 @@ def append_saved_media_to_parts(client, parts, evidence):
         })
     for note in evidence["voice_notes"]:
         parts.append({
+            "type": "text",
+            "text": (
+                f"[EVIDENCE SOURCE: {note['id']}] "
+                "The following audio is the submitted voice note. Cite this "
+                "voice-note ID when referring to spoken evidence."
+            ),
+        })
+        parts.append({
             "type": "audio",
             "data": base64.b64encode(note["audio"]).decode("utf-8"),
             "mime_type": note.get("type") or "audio/wav",
         })
     for video in evidence["videos"]:
+        parts.append({
+            "type": "text",
+            "text": (
+                f"[EVIDENCE SOURCE: {video['name']}] "
+                "The following video is the submitted inspection video. Cite "
+                "this exact filename when referring to visible evidence."
+            ),
+        })
         video_data = video["data"]
         video_key = hashlib.sha256(video_data).hexdigest()
         cached_video = st.session_state["finmorphs_gemini_files"].get(video_key)
@@ -302,7 +353,7 @@ def create_pdf_chart(title, labels, values, ylabel, chart_type="bar"):
 
 
 def create_pdf_report(report_text, scenarios, finance):
-    """Build a downloadable PDF with financial charts and report text."""
+    """Build a downloadable PDF with report sections and nearby charts."""
     pdf_buffer = BytesIO()
     styles = getSampleStyleSheet()
 
@@ -312,6 +363,42 @@ def create_pdf_report(report_text, scenarios, finance):
         textColor=colors.HexColor("#1d4ed8"),
         alignment=TA_CENTER,
         spaceAfter=18,
+    ))
+    styles.add(ParagraphStyle(
+        name="FinMorphsSubtitle",
+        parent=styles["Normal"],
+        textColor=colors.HexColor("#475569"),
+        alignment=TA_CENTER,
+        fontSize=11,
+        leading=16,
+        spaceAfter=18,
+    ))
+    styles.add(ParagraphStyle(
+        name="FinMorphsSection",
+        parent=styles["Heading2"],
+        textColor=colors.HexColor("#0f172a"),
+        spaceBefore=10,
+        spaceAfter=8,
+        keepWithNext=True,
+    ))
+    styles.add(ParagraphStyle(
+        name="FinMorphsSubsection",
+        parent=styles["Heading3"],
+        textColor=colors.HexColor("#1d4ed8"),
+        spaceBefore=7,
+        spaceAfter=5,
+        keepWithNext=True,
+    ))
+    styles.add(ParagraphStyle(
+        name="FinMorphsReminder",
+        parent=styles["BodyText"],
+        backColor=colors.HexColor("#eff6ff"),
+        borderColor=colors.HexColor("#93c5fd"),
+        borderWidth=0.7,
+        borderPadding=10,
+        leading=14,
+        spaceBefore=10,
+        spaceAfter=10,
     ))
 
     doc = SimpleDocTemplate(
@@ -325,21 +412,127 @@ def create_pdf_report(report_text, scenarios, finance):
     )
 
     elements = [
+        Spacer(1, 0.65 * inch),
         Paragraph("FinMorphs", styles["FinMorphsTitle"]),
-        Paragraph("Financial Intelligence Report", styles["Heading1"]),
-        Spacer(1, 10),
+        Paragraph(
+            "Site Visit Financial Due-Diligence Report",
+            styles["Heading1"],
+        ),
+        Paragraph(
+            "Evidence-led review of operations, financial assumptions, "
+            "verification needs, and analyst decisions",
+            styles["FinMorphsSubtitle"],
+        ),
+        HRFlowable(
+            width="82%",
+            thickness=1,
+            color=colors.HexColor("#bfdbfe"),
+            spaceBefore=8,
+            spaceAfter=18,
+        ),
+        Paragraph(
+            "How to read this report",
+            styles["FinMorphsSubsection"],
+        ),
+        Paragraph(
+            "This report connects the submitted visit evidence to possible "
+            "operational and financial implications. Evidence is not treated "
+            "as proof of performance: findings identify sources, uncertainty, "
+            "unknowns, and the verification work needed before decisions.",
+            styles["BodyText"],
+        ),
+        Spacer(1, 16),
+        Table(
+            [
+                ["Report generated", datetime.now().strftime("%d %b %Y, %I:%M %p")],
+                ["Evidence-led scope", "Visit context, media, tour notes, and financial model"],
+                ["Decision status", "Human review required before relying on findings"],
+            ],
+            colWidths=[1.55 * inch, 4.95 * inch],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eff6ff")),
+                ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#1e3a8a")),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]),
+        ),
+        PageBreak(),
     ]
 
-    # Convert report lines into safe PDF paragraphs.
+    scenario_labels = [row["Scenario"] for row in scenarios]
+    scenario_values = [
+        row["Contribution before fixed costs (₹)"]
+        for row in scenarios
+    ]
+    cost_labels = ["Purchase cost", "Other variable cost", "Selling price"]
+    cost_values = [
+        finance["unit_cost"],
+        finance["other_cost"],
+        finance["selling_price"],
+    ]
+    projection_labels = [f"Month {month}" for month in range(1, 7)]
+    projection_values = [
+        finance["monthly_contribution"] * month
+        for month in range(1, 7)
+    ]
+    summary_labels = [
+        "Monthly contribution",
+        "Fixed costs",
+        "After fixed costs",
+    ]
+    summary_values = [
+        finance["monthly_contribution"],
+        finance["fixed_costs"],
+        finance["estimated_after_fixed"],
+    ]
+    pie_values = [
+        finance["unit_cost"],
+        finance["other_cost"],
+        finance["contribution"],
+    ]
+
+    def add_chart(title, labels, values, ylabel, chart_type="bar", height=3.0):
+        chart = create_pdf_chart(
+            title, labels, values, ylabel, chart_type=chart_type
+        )
+        elements.append(Image(chart, width=6.55 * inch, height=height * inch))
+        elements.append(Spacer(1, 10))
+
+    # Convert report lines into safe PDF paragraphs and place charts near
+    # the financial sections they explain.
     for line in report_text.splitlines():
         line = line.strip()
         if not line:
             elements.append(Spacer(1, 5))
             continue
 
-        if line.startswith("#"):
+        if line.startswith("# FinMorphs"):
+            continue
+        if line.startswith("###"):
             heading = line.lstrip("# ").strip()
-            elements.append(Paragraph(html.escape(heading), styles["Heading2"]))
+            elements.append(Paragraph(
+                html.escape(heading),
+                styles["FinMorphsSubsection"],
+            ))
+        elif line.startswith("##"):
+            heading = line.lstrip("# ").strip()
+            elements.append(Paragraph(
+                html.escape(heading),
+                styles["FinMorphsSection"],
+            ))
+        elif line.startswith("#"):
+            heading = line.lstrip("# ").strip()
+            elements.append(Paragraph(
+                html.escape(heading),
+                styles["Heading1"],
+            ))
         elif line.startswith("|"):
             # Keep Markdown table rows readable in the PDF.
             elements.append(Paragraph(
@@ -359,101 +552,65 @@ def create_pdf_report(report_text, scenarios, finance):
 
         elements.append(Spacer(1, 5))
 
-    elements.append(PageBreak())
-    elements.append(Paragraph("Financial Visualizations", styles["Heading1"]))
-    elements.append(Spacer(1, 10))
-
-    scenario_labels = [row["Scenario"] for row in scenarios]
-    scenario_values = [
-        row["Contribution before fixed costs (₹)"]
-        for row in scenarios
-    ]
-
-    chart1 = create_pdf_chart(
-        "Scenario Contribution",
-        scenario_labels,
-        scenario_values,
-        "Contribution (₹)"
-    )
-    elements.append(Paragraph("1. Scenario Comparison", styles["Heading2"]))
-    elements.append(Image(chart1, width=6.7 * inch, height=3.4 * inch))
-    elements.append(Spacer(1, 16))
-
-    cost_labels = ["Purchase cost", "Other variable cost", "Selling price"]
-    cost_values = [
-        finance["unit_cost"],
-        finance["other_cost"],
-        finance["selling_price"],
-    ]
-
-    chart2 = create_pdf_chart(
-        "Cost and Selling Price per Unit",
-        cost_labels,
-        cost_values,
-        "Rupees per unit"
-    )
-    elements.append(Paragraph("2. Unit Economics", styles["Heading2"]))
-    elements.append(Image(chart2, width=6.7 * inch, height=3.4 * inch))
-    elements.append(Spacer(1, 16))
-
-    # Only show a pie chart when all components are valid and non-negative.
-    pie_values = [
-        finance["unit_cost"],
-        finance["other_cost"],
-        finance["contribution"],
-    ]
-
-    if finance["selling_price"] > 0 and all(v >= 0 for v in pie_values):
-        if sum(pie_values) > 0:
-            chart3 = create_pdf_chart(
-                "Selling Price Breakdown",
-                ["Purchase cost", "Other variable cost", "Contribution"],
-                pie_values,
+        if line.startswith("## Supplied financial inputs"):
+            elements.append(Paragraph("Unit economics", styles["Heading3"]))
+            add_chart(
+                "Cost and Selling Price per Unit",
+                cost_labels,
+                cost_values,
+                "Rupees per unit",
+                height=2.7,
+            )
+            if finance["selling_price"] > 0 and all(v >= 0 for v in pie_values):
+                if sum(pie_values) > 0:
+                    add_chart(
+                        "Selling Price Breakdown",
+                        ["Purchase cost", "Other variable cost", "Contribution"],
+                        pie_values,
+                        "Amount (₹)",
+                        chart_type="pie",
+                        height=2.7,
+                    )
+        elif line.startswith("## Calculated snapshot"):
+            elements.append(Paragraph("Financial position", styles["Heading3"]))
+            add_chart(
+                "Monthly Financial Position",
+                summary_labels,
+                summary_values,
                 "Amount (₹)",
-                chart_type="pie",
+                chart_type="horizontal",
+                height=2.7,
             )
-            elements.append(
-                Paragraph("3. Selling Price Breakdown", styles["Heading2"])
+            add_chart(
+                "Cumulative Contribution Projection",
+                projection_labels,
+                projection_values,
+                "Cumulative contribution (₹)",
+                chart_type="line",
+                height=2.7,
             )
-            elements.append(
-                Image(chart3, width=6.3 * inch, height=3.4 * inch)
+        elif line.startswith("## Scenario analysis"):
+            elements.append(Paragraph("Scenario comparison", styles["Heading3"]))
+            add_chart(
+                "Scenario Contribution",
+                scenario_labels,
+                scenario_values,
+                "Contribution (₹)",
+                height=2.7,
             )
 
-    projection_labels = [f"Month {month}" for month in range(1, 7)]
-    projection_values = [
-        finance["monthly_contribution"] * month
-        for month in range(1, 7)
-    ]
-    chart4 = create_pdf_chart(
-        "Cumulative Contribution Projection",
-        projection_labels,
-        projection_values,
-        "Cumulative contribution (₹)",
-        chart_type="line",
-    )
-    elements.append(Paragraph("4. Six-Month Contribution Projection", styles["Heading2"]))
-    elements.append(Image(chart4, width=6.7 * inch, height=3.4 * inch))
-    elements.append(Spacer(1, 16))
-
-    summary_labels = [
-        "Monthly contribution",
-        "Fixed costs",
-        "After fixed costs",
-    ]
-    summary_values = [
-        finance["monthly_contribution"],
-        finance["fixed_costs"],
-        finance["estimated_after_fixed"],
-    ]
-    chart5 = create_pdf_chart(
-        "Monthly Financial Position",
-        summary_labels,
-        summary_values,
-        "Amount (₹)",
-        chart_type="horizontal",
-    )
-    elements.append(Paragraph("5. Monthly Financial Position", styles["Heading2"]))
-    elements.append(Image(chart5, width=6.7 * inch, height=3.4 * inch))
+    elements.extend([
+        Spacer(1, 14),
+        Paragraph(
+            "<b>Human review reminder</b><br/>"
+            "Do not treat AI findings, visible conditions, user-entered "
+            "financial inputs, or scenario outputs as independently verified "
+            "facts. Confirm material concerns with documents, measurements, "
+            "records, and responsible stakeholders before making financial, "
+            "supplier, inventory, or operating decisions.",
+            styles["FinMorphsReminder"],
+        ),
+    ])
 
     def add_page_number(canvas, document):
         canvas.saveState()
@@ -674,6 +831,24 @@ with image_col:
     )
     for uploaded_photo in uploaded_photos:
         st.image(uploaded_photo, caption=uploaded_photo.name, use_container_width=True)
+        photo_data = uploaded_photo.getvalue()
+        existing_photo_hashes = {
+            hashlib.sha256(item["data"]).hexdigest()
+            for item in st.session_state["finmorphs_evidence"]["photos"]
+        }
+        if hashlib.sha256(photo_data).hexdigest() not in existing_photo_hashes:
+            st.session_state["finmorphs_evidence"]["photos"].append({
+                "name": uploaded_photo.name,
+                "data": photo_data,
+                "type": uploaded_photo.type,
+            })
+            register_session_item(
+                "photo",
+                uploaded_photo.name,
+                photo_data,
+                uploaded_photo.type,
+                "product photo uploader",
+            )
 with video_col:
     uploaded_videos = st.file_uploader(
         "Short inspection videos (optional)",
@@ -685,6 +860,24 @@ with video_col:
     for uploaded_video in uploaded_videos:
         st.video(uploaded_video.getvalue())
         st.caption(f"Selected: {uploaded_video.name} · {uploaded_video.size / (1024 * 1024):.1f} MB")
+        video_data = uploaded_video.getvalue()
+        existing_video_hashes = {
+            hashlib.sha256(item["data"]).hexdigest()
+            for item in st.session_state["finmorphs_evidence"]["videos"]
+        }
+        if hashlib.sha256(video_data).hexdigest() not in existing_video_hashes:
+            st.session_state["finmorphs_evidence"]["videos"].append({
+                "name": uploaded_video.name,
+                "data": video_data,
+                "type": uploaded_video.type,
+            })
+            register_session_item(
+                "video",
+                uploaded_video.name,
+                video_data,
+                uploaded_video.type,
+                "inspection video uploader",
+            )
 with audio_col:
     voice_note = st.audio_input("Record a voice note (optional)")
     if voice_note:
@@ -731,11 +924,31 @@ if contribution <= 0:
     st.warning("Contribution per unit is zero or negative with these inputs. Check the cost and selling-price values.")
 st.caption("Contribution = selling price − purchase cost − other variable cost. The after-fixed-cost figure still excludes tax, interest, unexpected expenses, returns and other possible costs; it is not verified net profit.")
 
-scenarios = []
-for label, multiplier in [("Conservative", 0.5), ("Base", 1.0), ("Upside", 1.25)]:
-    units = round(monthly_units * multiplier)
-    scenarios.append({"Scenario": label, "Units / month": units, "Inventory cost (₹)": round(units * unit_cost, 2), "Contribution before fixed costs (₹)": round(units * contribution, 2)})
+scenarios = build_scenarios(unit_cost, contribution, monthly_units)
 scenario_df = pd.DataFrame(scenarios)
+comparison = st.session_state.get("finmorphs_scenario_comparison")
+if comparison:
+    st.markdown("#### Before-and-after scenario comparison")
+    before_df = pd.DataFrame(comparison["before"]).set_index("Scenario")
+    after_df = pd.DataFrame(scenarios).set_index("Scenario")
+    comparison_df = before_df[
+        ["Units / month", "Contribution before fixed costs (₹)"]
+    ].rename(columns={
+        "Units / month": "Before units/month",
+        "Contribution before fixed costs (₹)": "Before contribution (₹)",
+    }).join(
+        after_df[
+            ["Units / month", "Contribution before fixed costs (₹)"]
+        ].rename(columns={
+            "Units / month": "After units/month",
+            "Contribution before fixed costs (₹)": "After contribution (₹)",
+        })
+    ).reset_index()
+    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+    st.caption(
+        "The comparison shows the current model after the approved assumption "
+        "change against the model captured before approval."
+    )
 chart_col1, chart_col2 = st.columns(2)
 with chart_col1:
     st.markdown("#### Scenario contribution")
@@ -913,16 +1126,23 @@ for uploaded_glasses_video in glasses_video_uploads:
 
 st.markdown("#### Capture a video from your camera")
 st.caption("Press Start, record the scene, then press Stop before saving it.")
-webrtc_context = webrtc_streamer(
-    key="glasses_video_capture",
-    video_processor_factory=GlassesVideoProcessor,
-    media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
-)
+try:
+    webrtc_context = webrtc_streamer(
+        key="glasses_video_capture",
+        video_processor_factory=GlassesVideoProcessor,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )
+except AttributeError:
+    # The optional camera component needs a browser session and is unavailable
+    # in automated runs; uploaded video evidence remains fully supported.
+    webrtc_context = None
+    st.info("Live camera capture is unavailable in this session. Upload a video instead.")
 
 captured_video = None
 if (
-    not webrtc_context.state.playing
+    webrtc_context is not None
+    and not webrtc_context.state.playing
     and webrtc_context.video_processor
     and webrtc_context.video_processor.frames
 ):
@@ -1085,13 +1305,25 @@ if st.button(
     disabled=not any(evidence.values()),
 ):
     review_prompt = f"""You are FinMorphs' evidence-to-finance reviewer.
-Review the saved inspection session. Identify only what the media and notes
-support, distinguish observations from assumptions, and suggest which current
-financial inputs deserve review. Never invent a replacement value from media
-unless it is explicitly visible and measurable. Return JSON only:
+Review the saved inspection session as a financial due-diligence assistant.
+Identify only what the media and notes support, distinguish visible facts from
+hypotheses and unknowns, and explain what the analyst should investigate
+financially. Every observation must name its source and label itself as
+VISIBLE_FACT, HYPOTHESIS, or UNKNOWN. Never invent a replacement value from
+media unless it is explicitly visible and measurable. Return JSON only:
 {{
       "key_observations": [
-        {{"finding": "...", "source": "filename or note identifier", "uncertainty": "low|medium|high", "why_uncertain": "..."}}
+        {{
+          "finding": "...",
+          "source": "photo/video/voice-note filename or tour note",
+          "evidence_type": "VISIBLE_FACT|HYPOTHESIS|UNKNOWN",
+          "operational_implication": "...",
+          "financial_relevance": "inventory, cost, fulfilment, working capital, or none",
+          "unknowns": "...",
+          "verification": "document, measurement, or follow-up question",
+          "uncertainty": "low|medium|high",
+          "why_uncertain": "..."
+        }}
       ],
       "assumptions_to_review": [
         {{"field": "selling_price", "current_value": 75, "suggested_value": null, "reason": "...", "source": "...", "uncertainty": "low|medium|high"}}
@@ -1113,6 +1345,11 @@ Saved evidence metadata:
                 {
                     "finding": "The saved session contains media and operational notes that require evidence review.",
                     "source": "session registry",
+                    "evidence_type": "UNKNOWN",
+                    "operational_implication": "The operating condition cannot be assessed until the media and notes are reviewed.",
+                    "financial_relevance": "Potential impact on inventory, fulfilment, and working capital is not yet known.",
+                    "unknowns": "The media does not establish repeatability, capacity, or actual transaction volume.",
+                    "verification": "Review each file, record a cycle-time measurement, and reconcile inventory and sales records.",
                     "uncertainty": "high",
                     "why_uncertain": "No live model was called in Demo mode.",
                 }
@@ -1121,14 +1358,18 @@ Saved evidence metadata:
                 {
                     "field": "monthly_units",
                     "current_value": monthly_units,
-                    "suggested_value": None,
-                    "reason": "Validate volume against inventory movement or point-of-sale records.",
+                    "suggested_value": max(0, int(monthly_units * 0.8)),
+                    "reason": "Illustrative review adjustment: validate volume against inventory movement or point-of-sale records.",
+                    "source": "demo review suggestion",
+                    "uncertainty": "high",
                 },
                 {
                     "field": "selling_price",
                     "current_value": selling_price,
-                    "suggested_value": None,
-                    "reason": "Confirm the observed or stated price with dated transaction evidence.",
+                    "suggested_value": round(selling_price * 0.95, 2),
+                    "reason": "Illustrative review adjustment: confirm the observed or stated price with dated transaction evidence.",
+                    "source": "demo review suggestion",
+                    "uncertainty": "high",
                 },
             ],
             "unanswered_questions": [
@@ -1163,13 +1404,88 @@ if review["key_observations"] or review["assumptions_to_review"] or review["unan
     with st.expander("Review findings and approve changes", expanded=True):
         if review["key_observations"]:
             st.markdown("**Evidence observations**")
-            for item in review["key_observations"]:
+            finding_statuses = [
+                "Accepted for follow-up",
+                "Rejected",
+                "Needs verification",
+            ]
+            financial_areas = [
+                "Inventory",
+                "Operating costs",
+                "Working capital",
+                "Delivery reliability",
+            ]
+            for finding_index, item in enumerate(review["key_observations"]):
                 if isinstance(item, dict):
+                    finding = item.get("finding", "Observation recorded")
+                    finding_key = str(finding_index)
+                    saved_review = st.session_state["finmorphs_finding_reviews"].get(
+                        finding_key,
+                        {
+                            "status": "Needs verification",
+                            "financial_area": "Working capital",
+                            "verification_note": item.get("verification", ""),
+                        },
+                    )
+                    st.markdown(f"**Potential concern:** {finding}")
                     st.write(
-                        f"• {item.get('finding', '')} "
+                        f"• {finding} "
                         f"(source: {item.get('source', 'unknown')}; "
+                        f"type: {item.get('evidence_type', 'HYPOTHESIS')}; "
                         f"uncertainty: {item.get('uncertainty', 'unknown')})"
                     )
+                    assessment_col, area_col = st.columns(2)
+                    with assessment_col:
+                        selected_status = st.selectbox(
+                            "Analyst assessment",
+                            finding_statuses,
+                            index=finding_statuses.index(
+                                saved_review.get(
+                                    "status", "Needs verification"
+                                )
+                            ),
+                            key=f"finding_status_{finding_index}",
+                        )
+                    with area_col:
+                        selected_area = st.selectbox(
+                            "Financial area to investigate",
+                            financial_areas,
+                            index=financial_areas.index(
+                                saved_review.get(
+                                    "financial_area", "Working capital"
+                                )
+                            ),
+                            key=f"finding_area_{finding_index}",
+                        )
+                    verification_note = st.text_input(
+                        "Verification record",
+                        value=saved_review.get(
+                            "verification_note",
+                            item.get("verification", ""),
+                        ),
+                        key=f"finding_verification_{finding_index}",
+                        help="Record the document, measurement, or question needed to confirm this finding.",
+                    )
+                    st.session_state["finmorphs_finding_reviews"][finding_key] = {
+                        "finding": finding,
+                        "source": item.get("source", "unknown"),
+                        "evidence_type": item.get("evidence_type", "HYPOTHESIS"),
+                        "status": selected_status,
+                        "financial_area": selected_area,
+                        "verification_note": verification_note,
+                    }
+                    if item.get("operational_implication"):
+                        st.caption(
+                            f"Operational implication: {item['operational_implication']}"
+                        )
+                    if item.get("financial_relevance"):
+                        st.caption(
+                            f"Financial relevance: {item['financial_relevance']}"
+                        )
+                    if item.get("unknowns"):
+                        st.caption(f"Unknowns: {item['unknowns']}")
+                    if item.get("verification"):
+                        st.caption(f"Verify: {item['verification']}")
                     if item.get("why_uncertain"):
                         st.caption(item["why_uncertain"])
                 else:
@@ -1193,8 +1509,15 @@ if review["key_observations"] or review["assumptions_to_review"] or review["unan
                 f"Uncertainty: {suggestion.get('uncertainty', 'unknown')}."
             )
             if suggested_value is not None:
+                proposed_value = st.number_input(
+                    f"Proposed {field} value",
+                    value=float(suggested_value),
+                    min_value=0.0,
+                    step=1.0,
+                    key=f"proposed_review_value_{index}",
+                )
                 if st.checkbox("Approve this numeric change", key=f"approve_review_{index}"):
-                    approved_suggestions.append((field, suggested_value))
+                    approved_suggestions.append((field, proposed_value))
         if approved_suggestions and st.button("Apply approved financial changes", type="primary"):
             input_keys = {
                 "unit_cost": "unit_cost_input",
@@ -1204,9 +1527,19 @@ if review["key_observations"] or review["assumptions_to_review"] or review["unan
                 "budget": "budget_input",
                 "fixed_costs": "fixed_costs_input",
             }
+            before_scenarios = build_scenarios(unit_cost, contribution, monthly_units)
             for field, value in approved_suggestions:
                 if field in input_keys and isinstance(value, (int, float)) and value >= 0:
                     st.session_state[input_keys[field]] = value
+                    st.session_state["finmorphs_approved_assumptions"].append({
+                        "field": field,
+                        "value": value,
+                        "approved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+            st.session_state["finmorphs_scenario_comparison"] = {
+                "before": before_scenarios,
+                "approved_fields": approved_suggestions,
+            }
             st.session_state["finmorphs_observation_review"]["assumptions_to_review"] = []
             st.success("Approved values applied. Scenarios will recalculate on the next run.")
             st.rerun()
@@ -1257,21 +1590,29 @@ if selected_frame is not None:
                 glasses_client = genai.Client(api_key=api_key)
 
                 prompt = """
-You are the hands-free AI assistant for FinMorphs, a prototype inspired
-by camera-equipped smart glasses used during warehouse and factory tours.
-Use only the supplied media and tour context. Separate direct evidence,
-reasonable hypotheses, and unknowns. You may describe visible body language
-or apparent nonverbal cues, but never identify a person's emotions,
-intentions, health, honesty, or personality as fact. Do not identify people.
+You are the hands-free financial due-diligence assistant for FinMorphs,
+used during warehouse and factory site visits.
+Use only the supplied media, voice notes, and tour context. Do not invent
+prices, quantities, identities, supplier claims, market movements, or
+financial facts. Separate what is visibly or explicitly stated from
+hypotheses and unknowns. Every important finding must name its source
+(for example, the current frame, a voice note, or a tour observation).
 
-If this is an assistant question, answer it directly first. Then return:
-1. OBSERVED EVIDENCE
-2. OPERATIONAL RELEVANCE
-3. POSSIBLE FINANCIAL IMPACT
-4. WHAT TO VERIFY NEXT
+If this is an assistant question, answer it directly first. Then return these
+sections for every material finding:
+1. OBSERVED EVIDENCE — what is actually visible or explicitly stated
+2. SOURCE — which photo, video, voice note, or tour note supports it
+3. POSSIBLE OPERATIONAL IMPLICATION — what it might mean for operations,
+   supply, throughput, or fulfilment
+4. FINANCIAL RELEVANCE — whether it could affect inventory, costs,
+   fulfilment, cash conversion, or working capital
+5. UNKNOWNS — what cannot be concluded from the media
+6. VERIFICATION — the document, measurement, or follow-up question needed
 
-Do not invent prices, quantities, identities, supplier claims, market
-movements, or financial facts. Do not give direct buy/sell instructions.
+Label each finding as VISIBLE_FACT, HYPOTHESIS, or UNKNOWN. Treat apparent
+sentiment or nonverbal cues as uncertain observations requiring human
+confirmation, never as facts about a person's emotions or intent. Do not
+give direct buy/sell instructions.
 """
 
                 parts = [{"type": "text", "text": prompt}]
@@ -1325,6 +1666,19 @@ movements, or financial facts. Do not give direct buy/sell instructions.
 
 st.subheader("5 · Generate Gemini analysis and downloadable report")
 st.caption("This step sends the entered question, financial values, and any selected image/audio/video to Gemini if Demo mode is off.")
+demo_steps = [
+    ("1. Site visit", bool(tour["active"] or tour["notes"] or tour["observations"])),
+    ("2. Evidence submitted", bool(evidence["photos"] or evidence["videos"] or evidence["voice_notes"])),
+    ("3. Findings reviewed", bool(review["key_observations"] or review["assumptions_to_review"])),
+    ("4. Assumption approved", bool(st.session_state.get("finmorphs_approved_assumptions"))),
+    ("5. Final PDF generated", "finmorphs_report" in st.session_state),
+]
+with st.expander("Live demo checklist", expanded=True):
+    st.caption("Use this sequence for a convincing walkthrough: visit → submit evidence → review → approve → download.")
+    st.write("  ·  ".join(
+        f"{'✅' if complete else '⬜'} {label}"
+        for label, complete in demo_steps
+    ))
 if st.button("Generate Financial Intelligence Report", type="primary", use_container_width=True):
     if not product_name.strip():
         st.error("Please enter a product name first.")
@@ -1375,18 +1729,54 @@ LIVE NEWS SOURCES:
 
 **Product:** {product_name}
 
-**What to verify:** Ask for dated invoices, point-of-sale records, repeat orders, inventory movement, return/expiry rates, and supplier capacity. Confirm whether sales refer to shipments to retailers or actual end-customer purchases.
+#### Observed evidence
+[SOURCE: saved tour notes and zone observations] [TYPE: VISIBLE_FACT] The session contains the submitted site-visit notes, media counts, and any recorded workflow measurements. These are the only direct inputs available in Demo mode.
 
-**Scalability checks:** Test whether supply can increase without disproportionate cost, whether repeat demand is evidenced, and whether working capital covers stock and payment delays.
+#### Source
+[SOURCE: session registry] The evidence register identifies each photo, video, voice note, and tour observation used for review.
 
-**Tour intelligence:** Review the saved facility notes and zone observations for queues, excess movement, idle capacity, or blocked flow. Any apparent nonverbal cues require human confirmation and should not be treated as fact.
+#### Possible operational implication
+[SOURCE: analyst question and saved tour context] [TYPE: HYPOTHESIS] Queues, excess movement, idle capacity, or unclear stock flow could affect throughput, fulfilment timing, and supplier capacity, but repeatability is not established.
+
+#### Financial relevance
+[SOURCE: financial inputs] [TYPE: HYPOTHESIS] Compare the observed operating pattern with inventory movement, unit costs, fulfilment costs, payment delays, and working-capital needs before relying on the monthly contribution estimate.
+
+#### Unknowns
+[SOURCE: demo mode and session registry] [TYPE: UNKNOWN] The media does not establish actual sales volume, repeat demand, supplier capacity, transaction prices, return rates, or whether any visible condition is representative.
+
+#### Verification
+[SOURCE: analyst question and financial inputs] [TYPE: HYPOTHESIS] Request dated invoices, point-of-sale records, repeat orders, inventory counts, return/expiry records, cycle-time measurements, and supplier capacity evidence. Confirm whether sales refer to shipments to retailers or actual end-customer purchases.
 
 **Evidence limitations:** No independent supplier or market database was queried. Media and financial inputs have not been independently verified. This response is a demonstration, not a forecast or recommendation."""
     else:
         try:
             client = genai.Client(api_key=API_KEY)
-            prompt = f"""You are FinMorphs, an evidence-conscious product and business due-diligence assistant.
-Analyze only the supplied evidence and facts. Do not claim access to live market databases, do not invent sales statistics or citations, and distinguish visible evidence from user claims and unknowns. Do not give buy/sell instructions or guarantee returns. State that financial estimates depend on user-supplied values. Use these headings: Field Answer; What the media supports; Facility tour signals; What remains unverified; Scalability checks; Risks and missing evidence; Recommended follow-up questions. Treat apparent sentiment or nonverbal cues as uncertain observations requiring human confirmation, never as facts about a person's emotions or intent.
+            prompt = f"""You are FinMorphs, an evidence-conscious financial due-diligence assistant.
+Analyze only the supplied evidence and facts. Do not claim access to live market
+databases, do not invent sales statistics or citations, and distinguish visible
+evidence from user claims, hypotheses, and unknowns. Every important finding
+must include an explicit source in the format [SOURCE: filename, note, or tour
+observation] and a label [TYPE: VISIBLE_FACT], [TYPE: HYPOTHESIS], or
+[TYPE: UNKNOWN].
+
+Your analysis must contain these sections for each material finding:
+1. Observed evidence — what is actually visible or explicitly stated.
+2. Source — which photo, video, voice note, or tour note supports it.
+3. Possible operational implication — what it might mean for operations,
+   supply, throughput, or fulfilment.
+4. Financial relevance — whether it could affect inventory, costs, fulfilment,
+   cash conversion, or working capital.
+5. Unknowns — what cannot be concluded from the media.
+6. Verification — the document, measurement, or follow-up question needed.
+
+Use these headings in the overall report: Field Answer; Observed evidence;
+Sources; Possible operational implications; Financial relevance; Unknowns;
+Verification plan; Facility tour signals; Risks and missing evidence; and
+Recommended follow-up questions. Do not give buy/sell instructions or
+guarantee returns. State that financial estimates depend on user-supplied
+values. Treat apparent sentiment or nonverbal cues as uncertain observations
+requiring human confirmation, never as facts about a person's emotions or
+intent.
 
 FINANCIAL INPUTS AND QUESTION:\n{financial_summary}"""
             parts = [{"type": "text", "text": prompt}]
@@ -1396,11 +1786,14 @@ FINANCIAL INPUTS AND QUESTION:\n{financial_summary}"""
             findings = response.output_text or "Gemini returned no text. Try a shorter voice note or a clearer image/video."
 
             if multi_model_mode:
-                consensus_prompt = f"""You are an independent second-opinion financial analyst.
-Review the following user-entered financial assumptions, facility-tour observations,
-and clearly labeled live headlines. Do not treat headlines as proof of product
-performance. Identify points of agreement, uncertainty, and the three most useful
-follow-up checks. Do not give buy/sell instructions.
+                consensus_prompt = f"""You are an independent second-opinion financial
+due-diligence analyst. Review the user-entered assumptions, facility-tour
+observations, and clearly labeled live headlines. Do not treat headlines as
+proof of product performance. For each important finding, state observed
+evidence, source, possible operational implication, financial relevance,
+unknowns, and verification. Label findings as VISIBLE_FACT, HYPOTHESIS, or
+UNKNOWN. Identify points of agreement, uncertainty, and the three most useful
+financial follow-up checks. Do not give buy/sell instructions.
 
 {financial_summary}"""
                 model_reviews = []
@@ -1423,7 +1816,126 @@ follow-up checks. Do not give buy/sell instructions.
             st.error(f"Gemini request failed: {exc}")
             st.info("Check that your API key is valid, internet is available, the model is enabled for your key, and the media file is supported. Your local financial calculations and charts still work.")
             st.stop()
-            
+
+    review = st.session_state["finmorphs_observation_review"]
+    evidence_register = "\n".join(
+        f"- {item['kind'].title()}: {item['filename']} · captured "
+        f"{item['timestamp']} · context/source: {item['source']}"
+        for item in st.session_state.get("finmorphs_session_items", [])
+    ) or "- No evidence items were saved to the session."
+    observation_lines = []
+    for item in review.get("key_observations", []):
+        if isinstance(item, dict):
+            observation_lines.append(
+                f"- {item.get('finding', 'Observation recorded')} "
+                f"(source: {item.get('source', 'unknown')}; "
+                f"type: {item.get('evidence_type', 'HYPOTHESIS')}; "
+                f"uncertainty: {item.get('uncertainty', 'unknown')})"
+            )
+            if item.get("operational_implication"):
+                observation_lines.append(
+                    f"  - Possible operational implication: {item['operational_implication']}"
+                )
+            if item.get("financial_relevance"):
+                observation_lines.append(
+                    f"  - Financial relevance: {item['financial_relevance']}"
+                )
+            if item.get("unknowns"):
+                observation_lines.append(f"  - Unknowns: {item['unknowns']}")
+            if item.get("verification"):
+                observation_lines.append(f"  - Verification: {item['verification']}")
+            if item.get("why_uncertain"):
+                observation_lines.append(f"  - Uncertainty note: {item['why_uncertain']}")
+        else:
+            observation_lines.append(f"- {item}")
+    observation_lines.extend(
+        f"- Tour note at {item['zone']}: {item['note']}"
+        for item in tour["notes"]
+    )
+    observation_lines.extend(
+        f"- {item['zone']}: {item['movement_pattern']}; cycle time "
+        f"{item['cycle_time_minutes']} minutes; walking {item['walking_distance_metres']} metres; "
+        f"queue length {item['queue_length']}"
+        for item in tour["observations"]
+    )
+    observations_text = "\n".join(observation_lines) or (
+        "- No structured evidence observations were recorded. "
+        "The attached media still requires human review."
+    )
+    business_implications = [
+        f"- At the entered volume of {monthly_units:,.0f} units/month, each ₹1 change "
+        f"in contribution per unit changes monthly contribution by approximately ₹{monthly_units:,.2f}.",
+        f"- The current contribution is ₹{contribution:,.2f} per unit and "
+        f"₹{monthly_contribution:,.2f} before fixed costs; confirm demand before "
+        "committing working capital to inventory.",
+    ]
+    if contribution <= 0:
+        business_implications.append(
+            "- The current price and cost inputs produce non-positive unit contribution, "
+            "which may pressure operating cash flow."
+        )
+    if any(
+        item.get("movement_pattern") in {"Queue or waiting", "Backtracking or excess movement"}
+        for item in tour["observations"]
+    ):
+        business_implications.append(
+            "- Recorded queueing or excess movement may reduce throughput and increase "
+            "labour, delay, or working-capital pressure; verify with time studies."
+        )
+    business_implications_text = "\n".join(business_implications)
+    verification_items = [
+        "- Match supplier invoices and purchase orders to the entered purchase cost.",
+        "- Match sales invoices, point-of-sale records, and repeat orders to the unit estimate.",
+        "- Reconcile inventory counts, stock ageing, returns, spoilage, and payment terms.",
+        "- Confirm freight, taxes, maintenance, warranty, financing, and other omitted costs.",
+    ]
+    verification_items.extend(
+        f"- Resolve unanswered question: {question}"
+        for question in review.get("unanswered_questions", [])
+    )
+    verification_text = "\n".join(verification_items)
+    approved_assumptions = st.session_state.get("finmorphs_approved_assumptions", [])
+    approved_text = "\n".join(
+        f"- {item['field']}: {item['value']} (approved {item['approved_at']})"
+        for item in approved_assumptions
+    ) or "- No numeric assumption was explicitly approved through the review control."
+    pending_text = "\n".join(
+        f"- {item.get('field', 'Unnamed assumption')}: {item.get('reason', 'Review against evidence.')} "
+        f"(suggested value: {item.get('suggested_value', 'manual review only')})"
+        for item in review.get("assumptions_to_review", [])
+    ) or "- No pending assumption changes."
+    finding_review_text = "\n".join(
+        f"- Finding: {item.get('finding', 'Observation recorded')}\n"
+        f"  - Source: {item.get('source', 'unknown')}\n"
+        f"  - Evidence type: {item.get('evidence_type', 'HYPOTHESIS')}\n"
+        f"  - Analyst status: {item.get('status', 'Needs verification')}\n"
+        f"  - Financial area: {item.get('financial_area', 'Working capital')}\n"
+        f"  - Verification record: {item.get('verification_note', 'Not recorded')}"
+        for item in st.session_state.get("finmorphs_finding_reviews", {}).values()
+    ) or "- No individual finding assessment has been recorded."
+    comparison = st.session_state.get("finmorphs_scenario_comparison")
+    if comparison:
+        before_by_scenario = {
+            row["Scenario"]: row for row in comparison["before"]
+        }
+        comparison_text = "\n".join(
+            f"| {row['Scenario']} | {before_by_scenario[row['Scenario']]['Contribution before fixed costs (₹)']:,.2f} | "
+            f"{row['Contribution before fixed costs (₹)']:,.2f} | "
+            f"{row['Contribution before fixed costs (₹)'] - before_by_scenario[row['Scenario']]['Contribution before fixed costs (₹)']:,.2f} |"
+            for row in scenarios
+        )
+        comparison_section = f"""## Approved assumption scenario comparison
+The table compares the model captured before approval with the current model after the approved change.
+
+| Scenario | Before contribution (₹) | After contribution (₹) | Change (₹) |
+|---|---:|---:|---:|
+{comparison_text}
+"""
+    else:
+        comparison_section = """## Approved assumption scenario comparison
+- No approved assumption change has been applied yet.
+"""
+
     report = f"""# FinMorphs — Financial Intelligence Report
 
 - Generated: {now}
@@ -1440,8 +1952,48 @@ follow-up checks. Do not give buy/sell instructions.
 - Saved tour notes: {len(tour['notes'])}
 - Zone observations: {len(tour['observations'])}
 
-## Analyst observation
+## Visit summary
+- Company/supplier: {supplier_name or 'Not provided'}
+- Location: {location or 'Not provided'}
+- Visit/report date: {now}
+- Analyst question: {observation or 'Not provided'}
+
+## Evidence register
+{evidence_register}
+
+## Observations
 {observation or 'Not provided'}
+
+{observations_text}
+
+## Business implications
+{business_implications_text}
+
+## Financial connection
+- Evidence attached: {len(evidence['photos'])} photo(s), {len(evidence['videos'])} video(s), and {len(evidence['voice_notes'])} voice note(s).
+- Current model: {monthly_units:,.0f} estimated monthly units and ₹{monthly_contribution:,.2f} monthly contribution before fixed costs.
+- Contribution/unit: ₹{contribution:,.2f}; contribution margin: {f'{margin_pct:.2f}%' if margin_pct is not None else 'N/A'}.
+- Inventory budget supports approximately {units_budget:,} units at the entered purchase cost.
+
+## Verification checklist
+{verification_text}
+
+## Analyst review
+### AI findings status
+- Accepted AI findings: none automatically; findings remain provisional until a reviewer confirms them against evidence.
+- Rejected or unaccepted AI findings: any finding that conflicts with the media, records, or reviewer judgment should be treated as rejected and excluded from decisions.
+- Demo mode: {'Yes — no AI model was called.' if demo_mode else 'No — Gemini analysis was requested.'}
+### Approved assumptions
+{approved_text}
+### Pending or rejected assumptions
+{pending_text}
+### Individual finding assessments
+{finding_review_text}
+### Review notes
+- Key observation review items: {len(review.get('key_observations', []))}
+- Unanswered questions: {len(review.get('unanswered_questions', []))}
+
+{comparison_section}
 
 ## Saved voice questions
 """ + "\n".join(
@@ -1511,7 +2063,7 @@ follow-up checks. Do not give buy/sell instructions.
 {findings}
 
 ## Limitations
-These figures are calculated from user-entered values and are not independently verified. Contribution is not net profit. Include taxes, financing, logistics, returns, spoilage, and other relevant costs before making decisions. This prototype does not automatically verify suppliers or market data.
+These figures are calculated from user-entered values and are not independently verified. Missing or unclear media, incomplete tour notes, unanswered questions, and unconfirmed supplier or customer records create uncertainty. Contribution is not net profit. Include taxes, financing, logistics, returns, spoilage, and other relevant costs before making decisions. This prototype does not automatically verify suppliers, market data, or AI claims.
 """
     st.session_state["finmorphs_report"] = report
     st.session_state["finmorphs_findings"] = findings

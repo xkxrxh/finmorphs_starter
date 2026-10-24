@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 from google import genai
@@ -102,6 +103,35 @@ monthly_contribution = contribution_per_unit * monthly_units
 capital_for_month = unit_cost * monthly_units
 max_units_with_budget = int(inventory_budget // unit_cost) if unit_cost > 0 else 0
 
+
+def build_scenarios(units, purchase_cost, contribution):
+    """Build all scenario rows from the current financial inputs."""
+    rows = []
+    for label, multiplier in (
+        ("Conservative", 0.5),
+        ("Base", 1.0),
+        ("Upside", 1.25),
+    ):
+        scenario_units = round(units * multiplier)
+        rows.append({
+            "Scenario": label,
+            "Units / month": scenario_units,
+            "Inventory cost (₹)": round(scenario_units * purchase_cost, 2),
+            "Contribution before fixed costs/tax (₹)": round(
+                scenario_units * contribution, 2
+            ),
+        })
+    return rows
+
+
+# Keep the comparison table and both charts driven by the live widget values.
+# Streamlit reruns this block whenever an input changes.
+scenarios = build_scenarios(
+    monthly_units,
+    unit_cost,
+    contribution_per_unit,
+)
+
 st.subheader("3 · Financial snapshot")
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Contribution / unit", f"₹{contribution_per_unit:,.2f}")
@@ -112,6 +142,53 @@ st.caption("Contribution is selling price minus entered unit purchase and other 
 
 if contribution_per_unit <= 0:
     st.warning("With the entered values, contribution per unit is zero or negative. Verify costs and pricing before considering further analysis.")
+
+st.markdown("#### Scenario comparison: contribution and monthly sales volume")
+scenario_chart_data = pd.DataFrame(scenarios).set_index("Scenario")
+chart_left, chart_right = st.columns(2, gap="large")
+with chart_left:
+    st.markdown("**Estimated monthly contribution before fixed costs and tax**")
+    st.bar_chart(
+        scenario_chart_data[["Contribution before fixed costs/tax (₹)"]],
+        x_label="Scenario",
+        y_label="Contribution (₹)",
+        use_container_width=True,
+    )
+    st.caption(
+        "What this shows: the estimated money left after purchase cost and "
+        "other variable cost for each scenario. It is not net profit."
+    )
+    st.markdown(
+        "**Required for this graph:** monthly units estimate, selling price "
+        "per unit, unit purchase cost, and other variable cost per unit. "
+        "The scenarios use 50% (Conservative), 100% (Base), and 125% "
+        "(Upside) of the monthly units estimate."
+    )
+with chart_right:
+    st.markdown("**Projected monthly sales volume by scenario**")
+    st.line_chart(
+        scenario_chart_data[["Units / month"]],
+        x_label="Scenario",
+        y_label="Units",
+        use_container_width=True,
+    )
+    st.caption(
+        "What this shows: the assumed number of units sold per month under "
+        "each scenario. This is a scenario comparison, not a historical "
+        "time-series trend."
+    )
+    st.markdown(
+        "**Required for this graph:** an estimated monthly unit volume. "
+        "The displayed values are calculated as 50% (Conservative), 100% "
+        "(Base), and 125% (Upside) of that estimate. Add dated sales history "
+        "if you want a genuine month-by-month trend line."
+    )
+
+st.dataframe(
+    scenario_chart_data.reset_index(),
+    use_container_width=True,
+    hide_index=True,
+)
 
 st.subheader("4 · Generate the inspection answer and report")
 if st.button("Generate Financial Intelligence Report", type="primary", use_container_width=True):
@@ -187,16 +264,6 @@ INSPECTION AND FINANCIAL INPUTS:
                 st.info("You can still turn on Demo mode to rehearse the complete presentation flow.")
                 st.stop()
 
-    scenarios = []
-    for label, multiplier in [("Conservative", 0.5), ("Base", 1.0), ("Upside", 1.25)]:
-        units = round(monthly_units * multiplier)
-        scenarios.append({
-            "Scenario": label,
-            "Units / month": units,
-            "Inventory cost (₹)": round(units * unit_cost, 2),
-            "Contribution before fixed costs/tax (₹)": round(units * contribution_per_unit, 2),
-        })
-
     report = f"""# FinMorphs — Inspection Report
 
 - **Generated:** {now}
@@ -259,11 +326,6 @@ if "last_report" in st.session_state:
 
     with st.expander("View AI field answer and findings", expanded=True):
         st.markdown(st.session_state["last_findings"])
-
-    rows = st.session_state.get("last_scenarios", [])
-    if rows:
-        st.markdown("**Scenario comparison**")
-        st.dataframe(rows, use_container_width=True, hide_index=True)
 
     st.download_button(
         "Download full report (.md)",

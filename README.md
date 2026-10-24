@@ -1,11 +1,15 @@
 # FinMorphs — Hackathon starter
 
-A Streamlit prototype that simulates the software workflow behind financial-intelligence smart glasses. It accepts a product photo, a typed observation and an optional microphone recording; calculates transparent unit economics; runs multimodal analysis through the Gemini API when configured; and exports a Markdown inspection report.
+A Streamlit prototype that simulates the software workflow behind financial-intelligence smart glasses. It accepts site-visit details, photos, videos, voice notes, and financial inputs; runs an evidence-linked Gemini pipeline when configured; lets an analyst review findings and approve assumption changes; and exports a professional Markdown/PDF due-diligence report.
 
 ## What's included
 
 - **Demo mode**: runs without an API key and clearly labels the AI findings as a simulation.
-- **Gemini mode**: passes the uploaded image, optional recorded audio and inspection details to `gemini-3.8-flash`.
+- **Gemini mode**: passes the saved photos, videos, voice notes, inspection details, and financial inputs to `gemini-3.8-flash`, with source markers for each media item.
+- **Evidence-linked findings**: separates visible facts, hypotheses, and unknowns, then records the source, financial relevance, and verification action for each finding.
+- **Analyst review**: accepts, rejects, or flags findings for verification and allows a human-approved financial assumption change.
+- **Transparent scenarios**: recalculates conservative, base, and upside scenarios after an approved assumption change.
+- **Professional report**: includes a visit summary, evidence register, findings, implications, scenario comparison, analyst review, verification checklist, limitations, and a human-review reminder.
 - Deterministic calculations for contribution per unit, contribution margin, monthly contribution, inventory budget, and simple scenario comparisons.
 - Downloadable Markdown report and browser-native read-aloud button.
 
@@ -32,15 +36,30 @@ A Streamlit prototype that simulates the software workflow behind financial-inte
    ```
 
 6. Your browser should open the local site. If it does not, open the `Local URL` shown in the terminal, usually `http://localhost:8501`.
-7. Enter a product name and sample financial data, optionally upload a picture/record audio, and click **Generate Financial Intelligence Report**. Download the report and try the read-aloud button.
+7. Enter a product name and sample financial data, start a site visit if useful, upload photos/videos or record a voice note, and click **Generate Financial Intelligence Report**. Download both the Markdown and PDF reports.
 
 ## Enable the live multimodal AI
 
 1. Open https://aistudio.google.com/apikey and create a Gemini API key.
 2. In the project folder, copy `.env.example` to a file named `.env`.
 3. Open `.env` and put your key after `GEMINI_API_KEY=`. Do not share screenshots of this file or publish it to GitHub.
-4. Restart the app if it was running. Turn **Demo mode — no AI API call** off in the sidebar and generate a report.
+4. Restart the app if it was running. Turn **Demo mode (no AI request)** off in the sidebar and generate a report.
 5. API/model access, quotas, and possible billing depend on your Google AI Studio account and current terms. Check usage before repeated demo requests.
+
+## Recommended Gemini workflow
+
+1. Add the site-visit context and the analyst's question.
+2. Upload the evidence and confirm that the saved evidence counts are correct.
+3. Click **Analyze saved session and suggest assumption reviews**.
+4. Review each finding's source, evidence type, uncertainty, financial area, and verification record.
+5. Approve a numeric assumption only when the supporting evidence and follow-up checks justify it.
+6. Compare the before/after scenarios.
+7. Generate the final report and keep the human-review reminder with the deliverable.
+
+Gemini interprets evidence and proposes investigation points; it does not invent
+financial impacts from an image. The app performs the scenario arithmetic only
+after an analyst-approved assumption change. Keep `.env` local and never commit
+API keys or confidential evidence.
 
 ## Optional multi-model and live-news review
 
