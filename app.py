@@ -133,6 +133,74 @@ def build_scenarios(unit_cost, contribution, monthly_units):
     ]
 
 
+def get_simulated_glasses_data(scenario):
+    """Return reviewable Smart Glasses demo cues without changing assumptions."""
+    scenarios = {
+        "Warehouse Visit (Bottleneck & Aging Stock)": {
+            "media_counts": {"photos": 2, "videos": 1, "voice_notes": 2},
+            "zone_observations": [
+                {
+                    "zone": "Zone A (Packaging)",
+                    "observation": "Assembly line operating at 40% capacity; 25 minutes idle time observed.",
+                    "impact": "High operational risk",
+                    "movement_pattern": "Idle equipment or staff",
+                },
+                {
+                    "zone": "Zone B (Storage)",
+                    "observation": "Dust accumulation on inventory boxes may indicate stock aging; verify against dated records.",
+                    "impact": "Working-capital risk",
+                    "movement_pattern": "Unknown",
+                },
+            ],
+            "voice_transcripts": [
+                {
+                    "speaker": "Analyst audio note",
+                    "text": "Management hesitated when discussing inventory turnover; treat this as an unverified cue.",
+                    "sentiment": "Uncertain / requires confirmation",
+                },
+                {
+                    "speaker": "Facility manager",
+                    "text": "We are currently running shift 1 only due to supply constraints.",
+                    "sentiment": "Statement requiring document verification",
+                },
+            ],
+            "vision_cues": ["Idle conveyor belts", "High stock aging", "Low facility utilization"],
+        },
+        "Factory Tour (High Efficiency)": {
+            "media_counts": {"photos": 2, "videos": 1, "voice_notes": 1},
+            "zone_observations": [
+                {
+                    "zone": "Assembly line",
+                    "observation": "Material flow appears continuous during the observed period.",
+                    "impact": "Potential throughput support",
+                    "movement_pattern": "Smooth flow",
+                },
+                {
+                    "zone": "Dispatch",
+                    "observation": "Orders moved through dispatch without a visible queue during the observation.",
+                    "impact": "Potential delivery reliability support",
+                    "movement_pattern": "Smooth flow",
+                },
+            ],
+            "voice_transcripts": [
+                {
+                    "speaker": "Facility manager",
+                    "text": "The current shift is operating at planned capacity.",
+                    "sentiment": "Statement requiring record verification",
+                },
+            ],
+            "vision_cues": ["Continuous material flow", "Clear dispatch path", "Low visible queueing"],
+        },
+        "Custom Manual Input": {
+            "media_counts": {"photos": 0, "videos": 0, "voice_notes": 0},
+            "zone_observations": [],
+            "voice_transcripts": [],
+            "vision_cues": [],
+        },
+    }
+    return scenarios[scenario]
+
+
 for photo in evidence["photos"]:
     register_session_item(
         "photo", photo["name"], photo["data"], photo.get("type"), "photo uploader"
@@ -352,7 +420,7 @@ def create_pdf_chart(title, labels, values, ylabel, chart_type="bar"):
     return buffer
 
 
-def create_pdf_report(report_text, scenarios, finance):
+def create_pdf_report(report_text, scenarios, finance, audit_log=None, pipeline_summary=None):
     """Build a downloadable PDF with report sections and nearby charts."""
     pdf_buffer = BytesIO()
     styles = getSampleStyleSheet()
@@ -411,6 +479,8 @@ def create_pdf_report(report_text, scenarios, finance):
         title="FinMorphs Financial Intelligence Report",
     )
 
+    pipeline_summary = pipeline_summary or {}
+    audit_log = audit_log or []
     elements = [
         Spacer(1, 0.65 * inch),
         Paragraph("FinMorphs", styles["FinMorphsTitle"]),
@@ -466,6 +536,73 @@ def create_pdf_report(report_text, scenarios, finance):
         PageBreak(),
     ]
 
+    elements.extend([
+        Paragraph("Smart Glasses pipeline summary", styles["FinMorphsSection"]),
+        Table(
+            [
+                ["Pipeline item", "Captured value"],
+                ["Analysis mode", pipeline_summary.get("analysis_mode", "Not recorded")],
+                ["Photos submitted", str(pipeline_summary.get("photo_count", 0))],
+                ["Videos submitted", str(pipeline_summary.get("video_count", 0))],
+                ["Voice notes submitted", str(pipeline_summary.get("voice_count", 0))],
+                ["Tour notes", str(pipeline_summary.get("tour_note_count", 0))],
+                ["Zone observations", str(pipeline_summary.get("zone_observation_count", 0))],
+                ["Glasses assistant response", pipeline_summary.get("assistant_status", "Not recorded")],
+                ["Simulation scenario", pipeline_summary.get("simulated_scenario", "Custom Manual Input")],
+                ["Simulated photos / videos / voice notes", pipeline_summary.get("simulated_media_counts", "0 / 0 / 0")],
+            ],
+            colWidths=[2.15 * inch, 4.35 * inch],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1d4ed8")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#eff6ff")),
+                ("TEXTCOLOR", (0, 1), (0, -1), colors.HexColor("#1e3a8a")),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]),
+        ),
+        Spacer(1, 14),
+        Paragraph("Smart Glasses Physical Audit Log", styles["FinMorphsSection"]),
+    ])
+
+    audit_rows = [["Observed physical cue", "Operational context", "Financial impact"]]
+    for item in audit_log:
+        audit_rows.append([
+            item["cue"],
+            item["context"],
+            item["financial_impact"],
+        ])
+    if len(audit_rows) == 1:
+        audit_rows.append([
+            "No physical cue recorded",
+            "The Smart Glasses pipeline did not capture a zone observation in this session.",
+            "No physical impact was modelled; verify the site condition before changing assumptions.",
+        ])
+    elements.append(Table(
+        audit_rows,
+        colWidths=[1.65 * inch, 2.45 * inch, 2.4 * inch],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f766e")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]),
+    ))
+    elements.append(PageBreak())
+
     scenario_labels = [row["Scenario"] for row in scenarios]
     scenario_values = [
         row["Contribution before fixed costs (₹)"]
@@ -507,8 +644,46 @@ def create_pdf_report(report_text, scenarios, finance):
 
     # Convert report lines into safe PDF paragraphs and place charts near
     # the financial sections they explain.
+    markdown_table_rows = []
+
+    def flush_markdown_table():
+        if not markdown_table_rows:
+            return
+        parsed_rows = []
+        for row in markdown_table_rows:
+            cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+            if cells and not all(set(cell) <= set("-: ") for cell in cells):
+                parsed_rows.append([
+                    Paragraph(html.escape(cell), styles["BodyText"])
+                    for cell in cells
+                ])
+        if parsed_rows:
+            elements.append(Table(
+                parsed_rows,
+                repeatRows=1,
+                colWidths=[6.55 * inch / len(parsed_rows[0])] * len(parsed_rows[0]),
+                style=TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1d4ed8")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]),
+            ))
+            elements.append(Spacer(1, 5))
+        markdown_table_rows.clear()
+
     for line in report_text.splitlines():
         line = line.strip()
+        if line.startswith("|"):
+            markdown_table_rows.append(line)
+            continue
+        flush_markdown_table()
         if not line:
             elements.append(Spacer(1, 5))
             continue
@@ -533,16 +708,11 @@ def create_pdf_report(report_text, scenarios, finance):
                 html.escape(heading),
                 styles["Heading1"],
             ))
-        elif line.startswith("|"):
-            # Keep Markdown table rows readable in the PDF.
-            elements.append(Paragraph(
-                html.escape(line.replace("|", "   •   ")),
-                styles["BodyText"]
-            ))
         elif line.startswith("- "):
             elements.append(Paragraph(
-                "• " + html.escape(line[2:]),
-                styles["BodyText"]
+                html.escape(line[2:]),
+                styles["BodyText"],
+                bulletText="•",
             ))
         else:
             elements.append(Paragraph(
@@ -599,6 +769,7 @@ def create_pdf_report(report_text, scenarios, finance):
                 height=2.7,
             )
 
+    flush_markdown_table()
     elements.extend([
         Spacer(1, 14),
         Paragraph(
@@ -792,6 +963,18 @@ with st.sidebar:
     st.caption("Uploaded media is sent to Gemini only when you generate a report with Demo mode off.")
     if not OPENAI_API_KEY or not ANTHROPIC_API_KEY:
         st.caption("Add OPENAI_API_KEY and ANTHROPIC_API_KEY to enable multi-model review.")
+    st.header("👓 Smart Glasses Capture Simulator")
+    glasses_scenario = st.selectbox(
+        "Select site-visit scenario",
+        [
+            "Warehouse Visit (Bottleneck & Aging Stock)",
+            "Factory Tour (High Efficiency)",
+            "Custom Manual Input",
+        ],
+        key="smart_glasses_scenario",
+        help="Populate illustrative physical cues for a repeatable demo. These cues never change financial inputs automatically.",
+    )
+    simulated_glasses_data = get_simulated_glasses_data(glasses_scenario)
 
 st.markdown(
     '<div class="section-title"><span class="section-number">1</span>'
@@ -993,6 +1176,41 @@ st.info(
     "Prototype mode: this uses your computer's camera or uploaded media. "
     "It does not yet connect to physical AI glasses."
 )
+
+if glasses_scenario != "Custom Manual Input":
+    st.markdown("#### Live simulated glasses cues")
+    st.caption(
+        "These are illustrative pipeline observations for the selected demo "
+        "scenario. They are evidence to review, not verified facts or automatic "
+        "financial adjustments."
+    )
+    cue_col, voice_col = st.columns(2)
+    with cue_col:
+        st.markdown("**Zone efficiency logs**")
+        for zone in simulated_glasses_data["zone_observations"]:
+            st.warning(
+                f"**{zone['zone']}**: {zone['observation']} "
+                f"({zone['impact']})"
+            )
+    with voice_col:
+        st.markdown("**Voice-note context**")
+        for voice in simulated_glasses_data["voice_transcripts"]:
+            st.info(
+                f"**{voice['speaker']}**: “{voice['text']}” "
+                f"— *{voice['sentiment']}*"
+            )
+    base_units = monthly_units
+    proposed_units = round(base_units * 0.5) if "Idle conveyor belts" in simulated_glasses_data["vision_cues"] else base_units
+    proposed_other_cost = other_cost + 4.0 if "Idle conveyor belts" in simulated_glasses_data["vision_cues"] else other_cost
+    st.markdown("**Reviewable model impact — not applied automatically**")
+    impact_col1, impact_col2, impact_col3 = st.columns(3)
+    impact_col1.metric("Current units/month", f"{base_units:,.0f}")
+    impact_col2.metric("Illustrative proposed units/month", f"{proposed_units:,.0f}", delta=f"{proposed_units - base_units:,.0f}")
+    impact_col3.metric("Illustrative other cost/unit", f"₹{proposed_other_cost:,.2f}", delta=f"₹{proposed_other_cost - other_cost:,.2f}")
+    st.caption(
+        "Approve any change through the evidence-to-finance review controls "
+        "after verifying inventory, output, and cost records."
+    )
 
 st.caption(
     "Only capture or upload images you have permission to use. "
@@ -1718,6 +1936,10 @@ ZONE EFFICIENCY OBSERVATIONS: {json.dumps(tour['observations'])}
 SAVED EVIDENCE COUNTS: {len(evidence['photos'])} photos, {len(evidence['videos'])} videos, {len(evidence['voice_notes'])} voice notes
 SAVED VOICE QUESTIONS:
 {json.dumps([note.get('transcript', '') or 'Audio question recorded; transcript unavailable.' for note in evidence['voice_notes']])}
+SIMULATED SMART GLASSES SCENARIO:
+{glasses_scenario}
+SIMULATED GLASSES CUES:
+{json.dumps(simulated_glasses_data)}
 EVIDENCE REVIEW:
 {json.dumps(st.session_state['finmorphs_observation_review'])}
 LIVE NEWS SOURCES:
@@ -1725,7 +1947,7 @@ LIVE NEWS SOURCES:
 """.strip()
     findings = ""
     if demo_mode:
-        findings = f"""### Illustrative demo response — no live AI model was called
+        findings = f"""### Illustrative demo response — Gemini request status: not requested
 
 **Product:** {product_name}
 
@@ -1936,21 +2158,111 @@ The table compares the model captured before approval with the current model aft
 - No approved assumption change has been applied yet.
 """
 
+    audit_impact_map = {
+        "Idle or stopped": (
+            "Idle assembly or processing capacity",
+            "Lower monthly output and possible fixed-cost absorption pressure",
+        ),
+        "Queue or waiting": (
+            "Queueing or waiting at the observed step",
+            "Potential fulfilment delay and higher working-capital days",
+        ),
+        "Backtracking or excess movement": (
+            "Excess movement or backtracking",
+            "Higher handling cost and lower throughput per labour hour",
+        ),
+        "Smooth flow": (
+            "Smooth movement through the observed zone",
+            "Potentially supports throughput; confirm with repeat measurements",
+        ),
+    }
+    physical_audit_log = []
+    for item in simulated_glasses_data["zone_observations"]:
+        pattern = item.get("movement_pattern", "Unknown")
+        cue, impact = audit_impact_map.get(
+            pattern,
+            (
+                item.get("observation", "Simulated physical cue"),
+                "Review against time-study and inventory records before changing assumptions",
+            ),
+        )
+        physical_audit_log.append({
+            "cue": f"{cue} (simulated)",
+            "context": (
+                f"{item.get('zone', 'Simulated zone')}; "
+                f"{item.get('observation', 'No observation text')}"
+            ),
+            "financial_impact": impact,
+        })
+    for item in tour["observations"]:
+        pattern = item.get("movement_pattern", "Unclassified")
+        cue, impact = audit_impact_map.get(
+            pattern,
+            (
+                f"{pattern} in {item.get('zone', 'observed zone')}",
+                "Financial impact requires time-study and operating-record verification",
+            ),
+        )
+        physical_audit_log.append({
+            "cue": cue,
+            "context": (
+                f"{item.get('zone', 'Observed zone')}; "
+                f"cycle time {item.get('cycle_time_minutes', 'not recorded')} min; "
+                f"queue {item.get('queue_length', 'not recorded')}"
+            ),
+            "financial_impact": impact,
+        })
+    pipeline_summary = {
+        "analysis_mode": (
+            "Demo simulation (no Gemini request)"
+            if demo_mode else "Live Gemini API analysis"
+        ),
+        "photo_count": len(evidence["photos"]),
+        "video_count": len(evidence["videos"]),
+        "voice_count": len(evidence["voice_notes"]),
+        "tour_note_count": len(tour["notes"]),
+        "zone_observation_count": len(tour["observations"]),
+        "assistant_status": (
+            "Available" if tour["assistant_response"] else "Not recorded"
+        ),
+        "simulated_scenario": glasses_scenario,
+        "simulated_media_counts": (
+            f"{simulated_glasses_data['media_counts']['photos']} / "
+            f"{simulated_glasses_data['media_counts']['videos']} / "
+            f"{simulated_glasses_data['media_counts']['voice_notes']}"
+        ),
+    }
+    voice_questions_text = "\n".join(
+        f"- Question {index}: {note.get('transcript', '') or 'Audio recorded; transcript unavailable.'}"
+        for index, note in enumerate(evidence["voice_notes"], start=1)
+    ) or "- No voice-note audio was submitted to the Smart Glasses pipeline."
+    facility_tour_text = "\n".join(
+        f"- {item['timestamp']} · {item['zone']}: {item['note']}"
+        for item in tour["notes"]
+    ) or "- No contextual tour notes were captured."
+    zone_observations_text = "\n".join(
+        f"- {item['timestamp']} · {item['zone']} · pattern: {item['movement_pattern']} · "
+        f"cycle time: {item['cycle_time_minutes']} min · walking: "
+        f"{item['walking_distance_metres']} m · queue: {item['queue_length']}"
+        for item in tour["observations"]
+    ) or "- No zone observations were captured by the Smart Glasses pipeline."
+
     report = f"""# FinMorphs — Financial Intelligence Report
 
 - Generated: {now}
-- Mode: {'DEMO SIMULATION — no AI model called' if demo_mode else 'Gemini API analysis'}
+- Mode: {pipeline_summary['analysis_mode']}
 - Product: {product_name}
 - Supplier: {supplier_name or 'Not provided'}
 - Location: {location or 'Not provided'}
 - Images analyzed from saved session: {len(evidence['photos'])}
 - Videos analyzed from saved session: {len(evidence['videos'])}
-- Voice notes saved: {len(evidence['voice_notes'])}
+- Voice notes submitted to Smart Glasses pipeline: {pipeline_summary['voice_count']}
 - Assistant response available: {'Yes' if tour['assistant_response'] else 'No'}
 - Live headlines included: {len(live_stories)}
 - Tour status: {'Active' if tour['active'] else 'Ended or not started'}
 - Saved tour notes: {len(tour['notes'])}
-- Zone observations: {len(tour['observations'])}
+- Zone observations captured by Smart Glasses pipeline: {pipeline_summary['zone_observation_count']}
+- Simulated Smart Glasses scenario: {glasses_scenario}
 
 ## Visit summary
 - Company/supplier: {supplier_name or 'Not provided'}
@@ -1982,7 +2294,7 @@ The table compares the model captured before approval with the current model aft
 ### AI findings status
 - Accepted AI findings: none automatically; findings remain provisional until a reviewer confirms them against evidence.
 - Rejected or unaccepted AI findings: any finding that conflicts with the media, records, or reviewer judgment should be treated as rejected and excluded from decisions.
-- Demo mode: {'Yes — no AI model was called.' if demo_mode else 'No — Gemini analysis was requested.'}
+- Gemini request status: {'Not requested; illustrative pipeline output.' if demo_mode else 'Requested; live Gemini analysis returned.'}
 ### Approved assumptions
 {approved_text}
 ### Pending or rejected assumptions
@@ -1996,24 +2308,22 @@ The table compares the model captured before approval with the current model aft
 {comparison_section}
 
 ## Saved voice questions
+""" + voice_questions_text + """
+
+## Simulated Smart Glasses observations
 """ + "\n".join(
-        f"- Question {index}: {note.get('transcript', '') or 'Audio recorded; transcript unavailable.'}"
-        for index, note in enumerate(evidence["voice_notes"], start=1)
+        f"- {item['zone']}: {item['observation']} · impact label: {item['impact']}"
+        for item in simulated_glasses_data["zone_observations"]
+    ) + "\n" + "\n".join(
+        f"- {item['speaker']}: {item['text']} · interpretation status: {item['sentiment']}"
+        for item in simulated_glasses_data["voice_transcripts"]
     ) + """
 
 ## Facility tour log
-""" + "\n".join(
-        f"- {item['timestamp']} · {item['zone']}: {item['note']}"
-        for item in tour["notes"]
-    ) + """
+""" + facility_tour_text + """
 
 ## Zone efficiency observations
-""" + "\n".join(
-        f"- {item['timestamp']} · {item['zone']} · pattern: {item['movement_pattern']} · "
-        f"cycle time: {item['cycle_time_minutes']} min · walking: "
-        f"{item['walking_distance_metres']} m · queue: {item['queue_length']}"
-        for item in tour["observations"]
-    ) + f"""
+""" + zone_observations_text + f"""
 
 ## Latest glasses assistant response
 {tour['assistant_response'] or 'No assistant response recorded.'}
@@ -2111,6 +2421,8 @@ if "finmorphs_report" in st.session_state:
             st.session_state["finmorphs_report"],
             st.session_state["finmorphs_scenarios"],
             st.session_state["finmorphs_finance"],
+            audit_log=physical_audit_log,
+            pipeline_summary=pipeline_summary,
         )
 
         st.download_button(
